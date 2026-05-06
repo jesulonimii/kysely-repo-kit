@@ -55,8 +55,19 @@ type PopulateConfig<
     foreignKey?: keyof InferSelectableRow<DB, Ref> & string
     localKey?: string
     justOne?: true
-    softDelete?: keyof InferSelectableRow<DB, Ref> & string
+    softDelete?: (keyof InferSelectableRow<DB, Ref> & string) | false
     nestedPopulations?: () => NestedPopulations
+}
+
+export type RepoBuilderConfig = {
+    softDelete?: string
+}
+
+type TableBuilderConfig<
+    DB,
+    TableName extends keyof DB & string,
+> = {
+    softDelete?: (keyof InferSelectableRow<DB, TableName> & string) | false
 }
 
 class RepoBuilder<
@@ -69,6 +80,7 @@ class RepoBuilder<
         private readonly currentTableName: TableName,
         private readonly currentPopulations: Populations = {} as Populations,
         private readonly currentSoftDeleteColumn?: keyof Selectable<Table> & string,
+        private readonly defaultSoftDeleteColumn?: string,
     ) {}
 
     softDelete<Column extends keyof Selectable<Table> & string>(column: Column) {
@@ -76,6 +88,7 @@ class RepoBuilder<
             this.currentTableName,
             this.currentPopulations,
             column,
+            this.defaultSoftDeleteColumn,
         )
     }
 
@@ -85,13 +98,14 @@ class RepoBuilder<
         NestedPopulations extends PopulationMap<DB> = Record<never, never>,
     >(def: PopulateConfig<DB, Name, Ref, NestedPopulations>) {
         const isSingle = Boolean(def.localKey || def.justOne)
+        const softDeleteColumn = def.softDelete === false ? undefined : def.softDelete ?? this.defaultSoftDeleteColumn
 
         const population = definePopulation<DB, InferRow<DB, Ref>, NestedPopulations>({
             table: def.ref,
             foreignKey: def.foreignKey ?? "id",
             localKey: def.localKey,
             ...(isSingle ? { justOne: true } : {}),
-            ...(def.softDelete ? { softDeleteColumn: def.softDelete } : {}),
+            ...(softDeleteColumn ? { softDeleteColumn } : {}),
             ...(def.nestedPopulations ? { nestedPopulations: def.nestedPopulations } : {}),
         } as any)
 
@@ -107,6 +121,7 @@ class RepoBuilder<
                 [def.as]: population,
             } as Populations & Record<Name, typeof population>,
             this.currentSoftDeleteColumn,
+            this.defaultSoftDeleteColumn,
         )
     }
 
@@ -142,10 +157,23 @@ class RepoBuilder<
     }
 }
 
-export function createRepoBuilder<DB>() {
+export function createRepoBuilder<DB>(config: RepoBuilderConfig = {}) {
     return {
-        table<TableName extends keyof DB & string>(tableName: TableName) {
-            return new RepoBuilder<DB, TableName>(tableName)
+        table<TableName extends keyof DB & string>(
+            tableName: TableName,
+            tableConfig: TableBuilderConfig<DB, TableName> = {},
+        ) {
+            const softDeleteColumn =
+                tableConfig.softDelete === false
+                    ? undefined
+                    : tableConfig.softDelete ?? config.softDelete
+
+            return new RepoBuilder<DB, TableName>(
+                tableName,
+                {} as EmptyPopulations,
+                softDeleteColumn as any,
+                config.softDelete,
+            )
         },
     }
 }
