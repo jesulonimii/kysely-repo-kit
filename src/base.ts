@@ -101,11 +101,13 @@ export interface PopulationDefinition<
     localKey?: string
     justOne?: true
     softDeleteColumn?: string
+    resolveSoftDeleteFromTable?: true
     readonly _type?: TRelated
     readonly _nestedPopulations?: () => TRelatedPopulations
 }
 
 export type PopulationMap<DB> = Record<string, PopulationDefinition<DB, any, any>>
+export type SoftDeleteRegistry<DB> = Map<keyof DB & string, string | false>
 
 type RelatedType<Def extends PopulationDefinition<any, any, any>> = NonNullable<Def["_type"]>
 
@@ -159,6 +161,16 @@ export type OrderByInput<Row> =
 
 export type PopulateInput<DB, Populations extends PopulationMap<DB>> = {
     [K in keyof Populations]?: PopulateKeyOption<DB, Populations[K]>
+}
+
+function getSoftDeleteColumnFromRegistry<DB>(
+    registry: SoftDeleteRegistry<DB> | undefined,
+    table: keyof DB & string,
+): string | undefined {
+    if (!registry?.has(table)) return undefined
+
+    const value = registry.get(table)
+    return typeof value === "string" ? value : undefined
 }
 
 function snakeToCamel(s: string): string {
@@ -410,6 +422,7 @@ export default class BaseRepository<
     protected readonly transaction?: Transaction<DB>
     protected readonly populations: Populations
     protected readonly softDeleteColumn?: keyof Table & string
+    protected readonly softDeleteRegistry?: SoftDeleteRegistry<DB>
 
     constructor({
                     db,
@@ -417,18 +430,21 @@ export default class BaseRepository<
                     transaction,
                     populations,
                     softDeleteColumn,
+                    softDeleteRegistry,
                 }: {
         db: Kysely<DB>
         tableName: TableName
         transaction?: Transaction<DB>
         populations?: Populations
         softDeleteColumn?: keyof Table & string
+        softDeleteRegistry?: SoftDeleteRegistry<DB>
     }) {
         this.db = db
         this.tableName = tableName
         this.transaction = transaction
         this.populations = (populations ?? {}) as Populations
         this.softDeleteColumn = softDeleteColumn
+        this.softDeleteRegistry = softDeleteRegistry
     }
 
     protected get executor() {
@@ -799,7 +815,15 @@ export default class BaseRepository<
     }
 
     protected applyPopulate<P extends PopulateInput<DB, Populations>>(q: any, populate: P): any {
-        return applyPopulateInner<DB>(q, this.tableName, this.populations, populate as any, 0, [this.tableName])
+        return applyPopulateInner<DB>(
+            q,
+            this.tableName,
+            this.populations,
+            populate as any,
+            0,
+            [this.tableName],
+            this.softDeleteRegistry,
+        )
     }
 
     protected fixPopulatedKeys<P extends PopulateInput<DB, Populations>>(rows: any[], populate?: P): any[] {
@@ -833,6 +857,7 @@ function applyPopulateInner<DB>(
     populate: Record<string, any>,
     depth: number,
     visitedPath: string[],
+    softDeleteRegistry?: SoftDeleteRegistry<DB>,
 ): any {
     if (depth > POPULATE_MAX_DEPTH) return q
 
@@ -841,8 +866,21 @@ function applyPopulateInner<DB>(
         if (!def) continue
 
         const popOptions = populate[key]
-        const { table, foreignKey, localKey = "id", justOne, _nestedPopulations, softDeleteColumn } = def
+        const {
+            table,
+            foreignKey,
+            localKey = "id",
+            justOne,
+            _nestedPopulations,
+            softDeleteColumn,
+            resolveSoftDeleteFromTable,
+        } = def
         const tableStr = String(table)
+        const resolvedSoftDeleteColumn =
+            softDeleteColumn ??
+            (resolveSoftDeleteFromTable
+                ? getSoftDeleteColumnFromRegistry(softDeleteRegistry, table)
+                : undefined)
 
         q = q.select((eb: any) => {
             let inner: any = eb.selectFrom(tableStr)
@@ -858,8 +896,8 @@ function applyPopulateInner<DB>(
 
             inner = inner.whereRef(`${tableStr}.${foreignKey}`, "=", `${parentTableName}.${localKey}`)
 
-            if (softDeleteColumn) {
-                inner = inner.where(`${tableStr}.${softDeleteColumn}`, "is", null)
+            if (resolvedSoftDeleteColumn && resolvedSoftDeleteColumn !== "false") {
+                inner = inner.where(`${tableStr}.${resolvedSoftDeleteColumn}`, "is", null)
             }
 
             if (typeof popOptions === "object" && popOptions.where) {
@@ -886,7 +924,7 @@ function applyPopulateInner<DB>(
                     inner = applyPopulateInner<DB>(inner, tableStr, nestedPops, popOptions.populate, depth + 1, [
                         ...visitedPath,
                         tableStr,
-                    ])
+                    ], softDeleteRegistry)
                 }
             }
 

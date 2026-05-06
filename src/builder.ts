@@ -5,6 +5,7 @@ import BaseRepository, {
     type InferTable,
     type PopulateInput,
     type PopulationMap,
+    type SoftDeleteRegistry,
 } from "./base"
 
 type EmptyPopulations = Record<never, never>
@@ -59,10 +60,6 @@ type PopulateConfig<
     nestedPopulations?: () => NestedPopulations
 }
 
-export type RepoBuilderConfig = {
-    softDelete?: string
-}
-
 type TableBuilderConfig<
     DB,
     TableName extends keyof DB & string,
@@ -80,15 +77,17 @@ class RepoBuilder<
         private readonly currentTableName: TableName,
         private readonly currentPopulations: Populations = {} as Populations,
         private readonly currentSoftDeleteColumn?: keyof Selectable<Table> & string,
-        private readonly defaultSoftDeleteColumn?: string,
+        private readonly softDeleteRegistry?: SoftDeleteRegistry<DB>,
     ) {}
 
-    softDelete<Column extends keyof Selectable<Table> & string>(column: Column) {
+    softDelete<Column extends keyof Selectable<Table> & string>(column: Column | false) {
+        this.softDeleteRegistry?.set(this.currentTableName, column === false ? false : column)
+
         return new RepoBuilder<DB, TableName, Populations, Table>(
             this.currentTableName,
             this.currentPopulations,
-            column,
-            this.defaultSoftDeleteColumn,
+            (column === false ? undefined : column),
+            this.softDeleteRegistry,
         )
     }
 
@@ -98,14 +97,14 @@ class RepoBuilder<
         NestedPopulations extends PopulationMap<DB> = Record<never, never>,
     >(def: PopulateConfig<DB, Name, Ref, NestedPopulations>) {
         const isSingle = Boolean(def.localKey || def.justOne)
-        const softDeleteColumn = def.softDelete === false ? undefined : def.softDelete ?? this.defaultSoftDeleteColumn
-
         const population = definePopulation<DB, InferRow<DB, Ref>, NestedPopulations>({
             table: def.ref,
             foreignKey: def.foreignKey ?? "id",
             localKey: def.localKey,
             ...(isSingle ? { justOne: true } : {}),
-            ...(softDeleteColumn ? { softDeleteColumn } : {}),
+            ...(def.softDelete === false ? {} : def.softDelete ? { softDeleteColumn: def.softDelete } : {
+                resolveSoftDeleteFromTable: true,
+            }),
             ...(def.nestedPopulations ? { nestedPopulations: def.nestedPopulations } : {}),
         } as any)
 
@@ -121,7 +120,7 @@ class RepoBuilder<
                 [def.as]: population,
             } as Populations & Record<Name, typeof population>,
             this.currentSoftDeleteColumn,
-            this.defaultSoftDeleteColumn,
+            this.softDeleteRegistry,
         )
     }
 
@@ -129,6 +128,7 @@ class RepoBuilder<
         const tableName = this.currentTableName
         const populations = this.currentPopulations
         const softDeleteColumn = this.currentSoftDeleteColumn
+        const softDeleteRegistry = this.softDeleteRegistry
 
         class GeneratedRepository extends BaseRepository<
             DB,
@@ -145,6 +145,7 @@ class RepoBuilder<
                     tableName,
                     populations,
                     softDeleteColumn: softDeleteColumn as any,
+                    softDeleteRegistry,
                 })
             }
 
@@ -157,22 +158,31 @@ class RepoBuilder<
     }
 }
 
-export function createRepoBuilder<DB>(config: RepoBuilderConfig = {}) {
+export function createRepoBuilder<DB>() {
+    const softDeleteRegistry: SoftDeleteRegistry<DB> = new Map()
+
     return {
         table<TableName extends keyof DB & string>(
             tableName: TableName,
             tableConfig: TableBuilderConfig<DB, TableName> = {},
         ) {
+            const inheritedSoftDelete = softDeleteRegistry.get(tableName)
             const softDeleteColumn =
                 tableConfig.softDelete === false
                     ? undefined
-                    : tableConfig.softDelete ?? config.softDelete
+                    : tableConfig.softDelete ?? (typeof inheritedSoftDelete === "string" ? inheritedSoftDelete : undefined)
+
+            if (tableConfig.softDelete === false) {
+                softDeleteRegistry.set(tableName, false)
+            } else if (softDeleteColumn) {
+                softDeleteRegistry.set(tableName, softDeleteColumn)
+            }
 
             return new RepoBuilder<DB, TableName>(
                 tableName,
                 {} as EmptyPopulations,
                 softDeleteColumn as any,
-                config.softDelete,
+                softDeleteRegistry,
             )
         },
     }
