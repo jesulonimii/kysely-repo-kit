@@ -102,6 +102,8 @@ export interface PopulationDefinition<
     justOne?: true
     softDeleteColumn?: string
     resolveSoftDeleteFromTable?: true
+    defaultSelect?: Record<string, boolean>
+    defaultWhere?: Record<string, any>
     readonly _type?: TRelated
     readonly _nestedPopulations?: () => TRelatedPopulations
 }
@@ -874,6 +876,8 @@ function applyPopulateInner<DB>(
             _nestedPopulations,
             softDeleteColumn,
             resolveSoftDeleteFromTable,
+            defaultSelect,
+            defaultWhere,
         } = def
         const tableStr = String(table)
         const resolvedSoftDeleteColumn =
@@ -885,8 +889,13 @@ function applyPopulateInner<DB>(
         q = q.select((eb: any) => {
             let inner: any = eb.selectFrom(tableStr)
 
-            if (typeof popOptions === "object" && popOptions.select) {
-                const cols = Object.entries(popOptions.select as Record<string, boolean>)
+            const resolvedSelect =
+                (typeof popOptions === "object" && popOptions.select)
+                    ? (popOptions.select as Record<string, boolean>)
+                    : defaultSelect
+
+            if (resolvedSelect) {
+                const cols = Object.entries(resolvedSelect)
                     .filter(([, v]) => v)
                     .map(([col]) => `${tableStr}.${col}`)
                 inner = inner.select(cols)
@@ -900,6 +909,9 @@ function applyPopulateInner<DB>(
                 inner = inner.where(`${tableStr}.${resolvedSoftDeleteColumn}`, "is", null)
             }
 
+            if (defaultWhere) {
+                inner = applyWhere(inner, tableStr, defaultWhere)
+            }
             if (typeof popOptions === "object" && popOptions.where) {
                 inner = applyWhere(inner, tableStr, popOptions.where)
             }

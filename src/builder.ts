@@ -1,14 +1,25 @@
 // repo-builder.ts
-import type { Kysely, Selectable, Transaction } from "kysely"
+import type { Insertable, Kysely, Selectable, Transaction, Updateable } from "kysely"
 import BaseRepository, {
     definePopulation,
     type InferTable,
     type PopulateInput,
     type PopulationMap,
+    type SelectInput,
     type SoftDeleteRegistry,
+    type WhereFilter,
 } from "./base"
 
 type EmptyPopulations = Record<never, never>
+
+type HooksConfig<DB, TableName extends keyof DB & string, Table extends object> = {
+    beforeCreate?: (data: Insertable<DB[TableName]>) => Promise<Insertable<DB[TableName]>> | Insertable<DB[TableName]>
+    beforeUpdate?: (data: Updateable<DB[TableName]>, where: WhereFilter<DB, TableName, Table>) => Promise<Updateable<DB[TableName]>> | Updateable<DB[TableName]>
+    beforeDelete?: (where: WhereFilter<DB, TableName, Table>) => Promise<void> | void
+    afterCreate?: (row: Selectable<Table>) => Promise<void> | void
+    afterUpdate?: (row: Selectable<Table> | null) => Promise<void> | void
+    afterDelete?: (row: Selectable<Table> | null) => Promise<void> | void
+}
 
 
 type InferSelectableRow<DB, TableName extends keyof DB & string> =
@@ -58,6 +69,8 @@ type PopulateConfig<
     justOne?: true
     softDelete?: (keyof InferSelectableRow<DB, Ref> & string) | false
     nestedPopulations?: () => NestedPopulations
+    select?: SelectInput<InferSelectableRow<DB, Ref>>
+    where?: WhereFilter<DB, Ref>
 }
 
 type TableBuilderConfig<
@@ -78,6 +91,7 @@ class RepoBuilder<
         private readonly currentPopulations: Populations = {} as Populations,
         private readonly currentSoftDeleteColumn?: keyof Selectable<Table> & string,
         private readonly softDeleteRegistry?: SoftDeleteRegistry<DB>,
+        private readonly currentHooks?: HooksConfig<DB, TableName, Table>,
     ) {}
 
     softDelete<Column extends keyof Selectable<Table> & string>(column: Column | false) {
@@ -88,6 +102,17 @@ class RepoBuilder<
             this.currentPopulations,
             (column === false ? undefined : column),
             this.softDeleteRegistry,
+            this.currentHooks,
+        )
+    }
+
+    hooks(config: HooksConfig<DB, TableName, Table>) {
+        return new RepoBuilder<DB, TableName, Populations, Table>(
+            this.currentTableName,
+            this.currentPopulations,
+            this.currentSoftDeleteColumn,
+            this.softDeleteRegistry,
+            config,
         )
     }
 
@@ -106,6 +131,8 @@ class RepoBuilder<
                 resolveSoftDeleteFromTable: true,
             }),
             ...(def.nestedPopulations ? { nestedPopulations: def.nestedPopulations } : {}),
+            ...(def.select ? { defaultSelect: def.select } : {}),
+            ...(def.where ? { defaultWhere: def.where } : {}),
         } as any)
 
         return new RepoBuilder<
@@ -121,6 +148,7 @@ class RepoBuilder<
             } as Populations & Record<Name, typeof population>,
             this.currentSoftDeleteColumn,
             this.softDeleteRegistry,
+            this.currentHooks as any,
         )
     }
 
@@ -129,6 +157,7 @@ class RepoBuilder<
         const populations = this.currentPopulations
         const softDeleteColumn = this.currentSoftDeleteColumn
         const softDeleteRegistry = this.softDeleteRegistry
+        const hooksConfig = this.currentHooks
 
         class GeneratedRepository extends BaseRepository<
             DB,
@@ -151,6 +180,33 @@ class RepoBuilder<
 
             opts<P extends PopulateInput<DB, Populations> = EmptyPopulations>() {
                 return {} as { populate?: P }
+            }
+
+            protected async beforeCreate(data: any): Promise<any> {
+                return hooksConfig?.beforeCreate ? hooksConfig.beforeCreate(data) : data
+            }
+
+            protected async beforeUpdate(data: any, where: any): Promise<any> {
+                return hooksConfig?.beforeUpdate ? hooksConfig.beforeUpdate(data, where) : data
+            }
+
+            protected async beforeDelete(where: any): Promise<void> {
+                await hooksConfig?.beforeDelete?.(where)
+            }
+
+            protected async afterCreate(row: any): Promise<any> {
+                await hooksConfig?.afterCreate?.(row)
+                return row
+            }
+
+            protected async afterUpdate(row: any): Promise<any> {
+                await hooksConfig?.afterUpdate?.(row)
+                return row
+            }
+
+            protected async afterDelete(row: any): Promise<any> {
+                await hooksConfig?.afterDelete?.(row)
+                return row
             }
         }
 
