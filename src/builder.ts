@@ -92,6 +92,7 @@ class RepoBuilder<
         private readonly currentSoftDeleteColumn?: keyof Selectable<Table> & string,
         private readonly softDeleteRegistry?: SoftDeleteRegistry<DB>,
         private readonly currentHooks?: HooksConfig<DB, TableName, Table>,
+        private readonly currentDefaultSelect?: SelectInput<Selectable<Table>>,
     ) {}
 
     softDelete<Column extends keyof Selectable<Table> & string>(column: Column | false) {
@@ -103,6 +104,7 @@ class RepoBuilder<
             (column === false ? undefined : column),
             this.softDeleteRegistry,
             this.currentHooks,
+            this.currentDefaultSelect,
         )
     }
 
@@ -113,6 +115,18 @@ class RepoBuilder<
             this.currentSoftDeleteColumn,
             this.softDeleteRegistry,
             config,
+            this.currentDefaultSelect,
+        )
+    }
+
+    defaultSelect(select: SelectInput<Selectable<Table>>) {
+        return new RepoBuilder<DB, TableName, Populations, Table>(
+            this.currentTableName,
+            this.currentPopulations,
+            this.currentSoftDeleteColumn,
+            this.softDeleteRegistry,
+            this.currentHooks,
+            select,
         )
     }
 
@@ -149,6 +163,7 @@ class RepoBuilder<
             this.currentSoftDeleteColumn,
             this.softDeleteRegistry,
             this.currentHooks as any,
+            this.currentDefaultSelect,
         )
     }
 
@@ -158,6 +173,7 @@ class RepoBuilder<
         const softDeleteColumn = this.currentSoftDeleteColumn
         const softDeleteRegistry = this.softDeleteRegistry
         const hooksConfig = this.currentHooks
+        const defaultSelect = this.currentDefaultSelect
 
         class GeneratedRepository extends BaseRepository<
             DB,
@@ -175,6 +191,7 @@ class RepoBuilder<
                     populations,
                     softDeleteColumn: softDeleteColumn as any,
                     softDeleteRegistry,
+                    defaultSelect: defaultSelect as any,
                 })
             }
 

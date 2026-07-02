@@ -157,6 +157,42 @@ export type WithPopulated<
 
 export type SelectInput<Row> = { [K in keyof Row]?: boolean }
 
+type ResolvedSelect = { mode: "include" | "exclude" | "all"; columns: string[] }
+
+function computeResolvedSelect(
+    defaultSelect: Record<string, boolean> | undefined,
+    querySelect: Record<string, boolean> | undefined,
+): ResolvedSelect {
+    const hasDefault = !!defaultSelect && Object.keys(defaultSelect).length > 0
+    const defaultIsWhitelist = hasDefault && Object.values(defaultSelect!).some(v => v === true)
+    const queryHasTrue = Object.values(querySelect ?? {}).some(v => v === true)
+
+    // Whitelist mode when the default itself is a whitelist, or (to preserve today's
+    // single-object behavior) there's no default at all and the query uses `true`.
+    const isWhitelistMode = defaultIsWhitelist || (!hasDefault && queryHasTrue)
+
+    // Per-key: query wins over default for the same key.
+    const merged: Record<string, boolean> = { ...defaultSelect, ...querySelect }
+    const forced = Object.entries(merged).filter(([, v]) => v === true).map(([k]) => k)
+    const hidden = Object.entries(merged).filter(([, v]) => v === false).map(([k]) => k)
+
+    if (isWhitelistMode) {
+        return forced.length ? { mode: "include", columns: forced } : { mode: "all", columns: [] }
+    }
+
+    // Default (if any) was exclude-style or absent -> blacklist mode; `forced` just
+    // un-hides columns, it never switches the whole query into include-only.
+    return hidden.length
+        ? { mode: "exclude", columns: hidden.filter(c => !forced.includes(c)) }
+        : { mode: "all", columns: [] }
+}
+
+function omitColumns<T extends Record<string, any>>(row: T, columns: string[]): T {
+    const copy = { ...row }
+    for (const col of columns) delete (copy as any)[col]
+    return copy
+}
+
 export type OrderByInput<Row> =
     | { [K in keyof Row]?: "asc" | "desc" }
     | { [K in keyof Row]?: "asc" | "desc" }[]
@@ -425,6 +461,7 @@ export default class BaseRepository<
     protected readonly populations: Populations
     protected readonly softDeleteColumn?: keyof Table & string
     protected readonly softDeleteRegistry?: SoftDeleteRegistry<DB>
+    protected readonly defaultSelect?: SelectInput<Table>
 
     constructor({
                     db,
@@ -433,6 +470,7 @@ export default class BaseRepository<
                     populations,
                     softDeleteColumn,
                     softDeleteRegistry,
+                    defaultSelect,
                 }: {
         db: Kysely<DB>
         tableName: TableName
@@ -440,6 +478,7 @@ export default class BaseRepository<
         populations?: Populations
         softDeleteColumn?: keyof Table & string
         softDeleteRegistry?: SoftDeleteRegistry<DB>
+        defaultSelect?: SelectInput<Table>
     }) {
         this.db = db
         this.tableName = tableName
@@ -447,6 +486,7 @@ export default class BaseRepository<
         this.populations = (populations ?? {}) as Populations
         this.softDeleteColumn = softDeleteColumn
         this.softDeleteRegistry = softDeleteRegistry
+        this.defaultSelect = defaultSelect
     }
 
     protected get executor() {
@@ -515,7 +555,8 @@ export default class BaseRepository<
         if (populate) q = this.applyPopulate(q, populate)
         if (lock === "update") q = q.forUpdate()
         else if (lock === "share") q = q.forShare()
-        return this.fixPopulatedKeys(await q.execute(), populate) as any
+        const rows = this.applyExclusion(await q.execute(), select)
+        return this.fixPopulatedKeys(rows, populate) as any
     }
 
     async findFirst<P extends PopulateInput<DB, Populations> = Record<never, never>>({
@@ -541,7 +582,8 @@ export default class BaseRepository<
         const row = await q.executeTakeFirst()
         if (!row) return null
 
-        const [result] = this.fixPopulatedKeys([row], populate)
+        const [stripped] = this.applyExclusion([row], select)
+        const [result] = this.fixPopulatedKeys([stripped], populate)
         return result ?? null
     }
 
@@ -568,7 +610,8 @@ export default class BaseRepository<
         const row = await q.executeTakeFirst()
         if (!row) return null
 
-        const [result] = this.fixPopulatedKeys([row], populate)
+        const [stripped] = this.applyExclusion([row], select)
+        const [result] = this.fixPopulatedKeys([stripped], populate)
         return result ?? null
     }
 
@@ -744,30 +787,41 @@ export default class BaseRepository<
         return (await this.count(args)) > 0
     }
 
+    protected resolveSelect(select?: SelectInput<Table>): ResolvedSelect {
+        return computeResolvedSelect(
+            this.defaultSelect as Record<string, boolean> | undefined,
+            select as Record<string, boolean> | undefined,
+        )
+    }
+
+    protected applyExclusion<T>(rows: T[], select?: SelectInput<Table>): T[] {
+        const resolved = this.resolveSelect(select)
+        if (resolved.mode !== "exclude") return rows
+        return rows.map(row => (row ? omitColumns(row as any, resolved.columns) : row)) as T[]
+    }
+
     protected async returning(q: any, select?: SelectInput<Table>, orThrow = false): Promise<Selectable<Table> | null> {
+        const resolved = this.resolveSelect(select)
         let built: any
 
-        if (select) {
-            const cols = Object.entries(select)
-                .filter(([, v]) => v)
-                .map(([k]) => `${this.tableName}.${k}`)
-            built = q.returning(cols)
+        if (resolved.mode === "include") {
+            built = q.returning(resolved.columns.map(k => `${this.tableName}.${k}`))
         } else {
             built = q.returningAll()
         }
 
         const row = orThrow ? await built.executeTakeFirstOrThrow() : await built.executeTakeFirst()
-        return (row as Selectable<Table>) ?? null
+        if (!row) return null
+
+        return (resolved.mode === "exclude" ? omitColumns(row, resolved.columns) : row) as Selectable<Table>
     }
 
     protected applySelect(q: any, select?: SelectInput<Table>): any {
-        if (!select) return q.selectAll(this.tableName)
-
-        const cols = Object.entries(select)
-            .filter(([, v]) => v)
-            .map(([k]) => `${this.tableName}.${k}`)
-
-        return cols.length ? q.select(cols) : q.selectAll(this.tableName)
+        const resolved = this.resolveSelect(select)
+        if (resolved.mode === "include") {
+            return q.select(resolved.columns.map(k => `${this.tableName}.${k}`))
+        }
+        return q.selectAll(this.tableName)
     }
 
     protected applyOrderBy(q: any, orderBy: OrderByInput<Table>): any {

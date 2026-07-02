@@ -13,6 +13,7 @@ A fully typed repository, relation population, and hook layer for [Kysely](https
 - **🪝 Lifecycle Hooks**: Intercept database actions using `beforeCreate`, `afterCreate`, `beforeUpdate`, `afterUpdate`, `beforeDelete`, and `afterDelete`.
 - **🗑️ Native Soft Delete**: Easily set up table-wide soft deletes. Safely filter out deleted records automatically across queries and populations.
 - **🧩 Power Queries**: Multi-faceted filter system supporting nested `AND` / `OR` / `NOT`, Case-insensitive text searches, Jsonb paths filtering, and raw SQL escapes.
+- **🕵️ Default Column Selection**: Configure a repo-wide default `select` (inclusion or exclusion) that per-query `select` options merge with, not replace.
 - **🤝 Transaction Session Propagation**: Easily pass Kysely transactions down using `.withSession(tx)`.
 
 ---
@@ -210,6 +211,53 @@ const users = await userRepo.findMany({
   }
 });
 ```
+
+---
+
+### Default Column Selection
+
+Configure a repo-wide default `select` with `.defaultSelect(...)` on the builder. It supports two shapes:
+
+- **Exclusion (blacklist)** — mark a column `false` to hide it everywhere by default, while every other column stays visible:
+  ```typescript
+  export const UserRepository = repoBuilder
+    .table('users')
+    .defaultSelect({ password: false }) // hide `password` unless a query asks for it
+    .init;
+
+  await userRepo.findFirst({}); 
+  // -> { id, email, name, created_at }  (no password)
+  ```
+
+- **Inclusion (whitelist)** — mark columns `true` to return *only* those columns by default:
+  ```typescript
+  export const UserRepository = repoBuilder
+    .table('users')
+    .defaultSelect({ id: true, email: true, name: true })
+    .init;
+
+  await userRepo.findFirst({});
+  // -> { id, email, name }
+  ```
+
+A per-query `select` **merges** with the default rather than replacing it outright — the query only overrides the specific columns it mentions:
+
+```typescript
+// Repo default: { password: false }
+await userRepo.findFirst({ select: { password: true } });
+// -> un-hides `password` for this query only; every other column is still returned
+
+// Repo default: { id: true, email: true, name: true }
+await userRepo.findFirst({ select: { name: false } });
+// -> { id, email }  (query removes `name` from the default include set)
+
+await userRepo.findFirst({ select: { created_at: true } });
+// -> { id, email, name, created_at }  (query adds a column to the default include set)
+```
+
+Whether a `select` behaves as a whitelist or a blacklist is determined by the repo's `defaultSelect` (if one is configured — a whitelist default keeps you in "only these columns" mode, a blacklist default keeps you in "everything except these columns" mode). With no `defaultSelect` configured at all, a bare `select: { column: true }` on its own behaves exactly as an inclusion-only whitelist for that one query, same as before this feature existed.
+
+This applies everywhere a `select` option is accepted: `findMany`, `findFirst`, `findUnique`, `create`, `update`, and `updateUnique`.
 
 ---
 
