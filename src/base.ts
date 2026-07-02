@@ -458,7 +458,7 @@ export default class BaseRepository<
     protected readonly db: Kysely<DB>
     protected readonly tableName: TableName
     protected readonly transaction?: Transaction<DB>
-    protected readonly populations: Populations
+    readonly populations: Populations
     protected readonly softDeleteColumn?: keyof Table & string
     protected readonly softDeleteRegistry?: SoftDeleteRegistry<DB>
     protected readonly defaultSelect?: SelectInput<Table>
