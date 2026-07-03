@@ -3,6 +3,7 @@ import type { Insertable, Kysely, Selectable, Transaction, Updateable } from "ky
 import BaseRepository, {
     definePopulation,
     type InferTable,
+    type LazySelectInput,
     type PopulateInput,
     type PopulationMap,
     type SelectInput,
@@ -69,7 +70,7 @@ type PopulateConfig<
     justOne?: true
     softDelete?: (keyof InferSelectableRow<DB, Ref> & string) | false
     nestedPopulations?: () => NestedPopulations
-    select?: SelectInput<InferSelectableRow<DB, Ref>>
+    select?: LazySelectInput<InferSelectableRow<DB, Ref>>
     where?: WhereFilter<DB, Ref>
 }
 

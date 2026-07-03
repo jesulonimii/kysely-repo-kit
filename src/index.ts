@@ -9,6 +9,7 @@ export type {
     InferTable,
     JsonbFilterKey,
     JsonbWhereFilter,
+    LazySelectInput,
     NumberFilter,
     OrderByInput,
     PopulateInput,

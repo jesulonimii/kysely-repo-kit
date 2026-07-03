@@ -102,7 +102,7 @@ export interface PopulationDefinition<
     justOne?: true
     softDeleteColumn?: string
     resolveSoftDeleteFromTable?: true
-    defaultSelect?: Record<string, boolean>
+    defaultSelect?: LazySelectInput<TRelated>
     defaultWhere?: Record<string, any>
     readonly _type?: TRelated
     readonly _nestedPopulations?: () => TRelatedPopulations
@@ -121,14 +121,14 @@ type PopulateKeyOption<DB, Def extends PopulationDefinition<DB, any, any>> = [ke
     ?
     | true
     | {
-    select?: SelectInput<RelatedType<Def>>
+    select?: LazySelectInput<RelatedType<Def>>
     where?: WhereFilter<DB, Def["table"] & string>
     orderBy?: OrderByInput<RelatedType<Def>>
 }
     :
     | true
     | {
-    select?: SelectInput<RelatedType<Def>>
+    select?: LazySelectInput<RelatedType<Def>>
     where?: WhereFilter<DB, Def["table"] & string>
     orderBy?: OrderByInput<RelatedType<Def>>
     populate?: PopulateInput<DB, RelatedPops<Def>>
@@ -156,6 +156,11 @@ export type WithPopulated<
 }
 
 export type SelectInput<Row> = { [K in keyof Row]?: boolean }
+export type LazySelectInput<Row> = SelectInput<Row> | (() => SelectInput<Row>)
+
+function resolveSelectInput<Row>(input?: LazySelectInput<Row>): SelectInput<Row> | undefined {
+    return typeof input === "function" ? (input as () => SelectInput<Row>)() : input
+}
 
 type ResolvedSelect = { mode: "include" | "exclude" | "all"; columns: string[] }
 
@@ -943,10 +948,11 @@ function applyPopulateInner<DB>(
         q = q.select((eb: any) => {
             let inner: any = eb.selectFrom(tableStr)
 
-            const resolvedSelect =
+            const resolvedSelect = resolveSelectInput(
                 (typeof popOptions === "object" && popOptions.select)
-                    ? (popOptions.select as Record<string, boolean>)
-                    : defaultSelect
+                    ? popOptions.select
+                    : defaultSelect,
+            ) as Record<string, boolean> | undefined
 
             if (resolvedSelect) {
                 const cols = Object.entries(resolvedSelect)
