@@ -698,16 +698,62 @@ export default class BaseRepository<
         where: WhereFilter<DB, TableName, Table>
         create: Insertable<DB[TableName]>
         update: Updateable<DB[TableName]>
-    }): Promise<Selectable<Table>[]> {
+    }): Promise<Selectable<Table>> {
         const processedCreate = await this.beforeCreate(create)
         const processedUpdate = await this.beforeUpdate(update, where)
+        const conflictColumns = Object.keys(where) as any
+        const values = { ...where, ...processedCreate } as any
 
-        return (await this.executor
-            .insertInto(this.tableName)
-            .values({ ...where, ...processedCreate } as any)
-            .onConflict(oc => oc.columns(Object.keys(where) as any).doUpdateSet(processedUpdate as any))
-            .returningAll()
-            .execute()) as unknown as Selectable<Table>[]
+        if (Object.keys(processedUpdate).length > 0) {
+            return (await this.executor
+                .insertInto(this.tableName)
+                .values(values)
+                .onConflict(oc => oc.columns(conflictColumns).doUpdateSet(processedUpdate as any))
+                .returningAll()
+                .executeTakeFirstOrThrow()) as unknown as Selectable<Table>
+        }
+
+        const execute = async (): Promise<Selectable<Table> | undefined> => {
+            let existing: any = (this.executor.selectFrom(this.tableName) as any).selectAll()
+            existing = applyWhere(existing, this.tableName, where as any)
+
+            return (await (this.executor as any)
+                .with("inserted", (db: any) =>
+                    db
+                        .insertInto(this.tableName)
+                        .values(values)
+                        .onConflict((oc: any) => oc.columns(conflictColumns).doNothing())
+                        .returningAll(),
+                )
+                .selectFrom("inserted")
+                .selectAll()
+                .unionAll(existing)
+                .executeTakeFirst()) as Selectable<Table> | undefined
+        }
+
+        const row = await execute()
+        if (row) return row
+
+        const retriedRow = await execute()
+        if (retriedRow) return retriedRow
+
+        throw new Error(`Upsert could not resolve a row for table ${this.tableName}`)
+    }
+
+    async upsertMany({
+                         data,
+                     }: {
+        data: {
+            where: WhereFilter<DB, TableName, Table>
+            create: Insertable<DB[TableName]>
+            update: Updateable<DB[TableName]>
+        }[]
+    }): Promise<Selectable<Table>[]> {
+        const rows: Selectable<Table>[] = []
+        for (const item of data) {
+            rows.push(await this.upsert(item))
+        }
+        return rows
     }
 
     async hardDelete({ where }: { where: WhereFilter<DB, TableName, Table> }): Promise<Selectable<Table> | null> {

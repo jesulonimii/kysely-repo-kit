@@ -166,7 +166,8 @@ Every generated repository inherits from `BaseRepository` and exposes the follow
 * **`update({ where, data, select })`**
 * **`updateUnique({ where: { id }, data, select })`**
 * **`updateMany({ where, data })`**
-* **`upsert({ where, create, update })`**
+* **`upsert({ where, create, update })`** — Returns the inserted, updated, or existing row. An empty `update` leaves a conflicting row unchanged.
+* **`upsertMany({ data })`** — Runs the same upsert behavior for each item and returns the resolved rows in input order.
 * **`delete({ where })`** (performs soft-delete if enabled, otherwise hard-delete)
 * **`softDelete({ where, deletedAt })`** (explicitly soft-delete records)
 * **`hardDelete({ where })`** (explicitly hard-delete records)
