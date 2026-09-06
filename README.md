@@ -155,10 +155,24 @@ Every generated repository inherits from `BaseRepository` and exposes the follow
 
 #### Retrieve Queries
 * **`findMany({ where, select, populate, skip, take, orderBy, lock, includeDeleted })`**
+* **`findManyAndCount({ where, select, populate, skip, take, orderBy, lock, includeDeleted })`**
 * **`findFirst({ where, select, populate, lock, includeDeleted })`**
 * **`findUnique({ where: { id }, select, populate, includeDeleted })`**
 * **`count({ where, includeDeleted })`**
 * **`exists({ where, includeDeleted })`**
+
+`findManyAndCount` is a pagination convenience method that returns `[data, total]` and runs the
+find and count queries concurrently:
+
+```typescript
+const [data, total] = await riderRepo.findManyAndCount({
+  where,
+  skip,
+  take: limit,
+  orderBy: { createdAt: sort },
+  populate,
+})
+```
 
 #### Mutation Queries
 * **`create({ data, select })`**

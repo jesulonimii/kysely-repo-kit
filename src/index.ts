@@ -6,6 +6,7 @@ export {
 export type {
     DateFilter,
     FieldFilter,
+    FindManyArgs,
     InferTable,
     JsonbFilterKey,
     JsonbWhereFilter,

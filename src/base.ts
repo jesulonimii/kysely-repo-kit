@@ -206,6 +206,23 @@ export type PopulateInput<DB, Populations extends PopulationMap<DB>> = {
     [K in keyof Populations]?: PopulateKeyOption<DB, Populations[K]>
 }
 
+export type FindManyArgs<
+    DB,
+    TableName extends keyof DB & string,
+    Populations extends PopulationMap<DB>,
+    Table extends object = InferTable<DB, TableName>,
+    P extends PopulateInput<DB, Populations> = Record<never, never>,
+> = {
+    where?: WhereFilter<DB, TableName, Table>
+    select?: SelectInput<Table>
+    populate?: P
+    skip?: number
+    take?: number
+    orderBy?: OrderByInput<Table>
+    lock?: "update" | "share"
+    includeDeleted?: boolean
+}
+
 function getSoftDeleteColumnFromRegistry<DB>(
     registry: SoftDeleteRegistry<DB> | undefined,
     table: keyof DB & string,
@@ -542,16 +559,7 @@ export default class BaseRepository<
                                                                                         orderBy,
                                                                                         lock,
                                                                                         includeDeleted = false,
-                                                                                    }: {
-        where?: WhereFilter<DB, TableName, Table>
-        select?: SelectInput<Table>
-        populate?: P
-        skip?: number
-        take?: number
-        orderBy?: OrderByInput<Table>
-        lock?: "update" | "share"
-        includeDeleted?: boolean
-    } = {}): Promise<WithPopulated<DB, Table, Populations, P>[]> {
+                                                                                    }: FindManyArgs<DB, TableName, Populations, Table, P> = {}): Promise<WithPopulated<DB, Table, Populations, P>[]> {
         let q: any = this.executor.selectFrom(this.tableName)
         q = applyWhere(q, this.tableName, this.withSoftDeleteFilter(where as any, includeDeleted))
         q = q.offset(skip).limit(take)
@@ -562,6 +570,20 @@ export default class BaseRepository<
         else if (lock === "share") q = q.forShare()
         const rows = this.applyExclusion(await q.execute(), select)
         return this.fixPopulatedKeys(rows, populate) as any
+    }
+
+    async findManyAndCount<P extends PopulateInput<DB, Populations> = Record<never, never>>(
+        args: FindManyArgs<DB, TableName, Populations, Table, P> = {},
+    ): Promise<[WithPopulated<DB, Table, Populations, P>[], number]> {
+        const {
+            where = {} as WhereFilter<DB, TableName, Table>,
+            includeDeleted = false,
+        } = args
+
+        return Promise.all([
+            this.findMany<P>(args),
+            this.count({ where, includeDeleted }),
+        ])
     }
 
     async findFirst<P extends PopulateInput<DB, Populations> = Record<never, never>>({
@@ -832,6 +854,33 @@ export default class BaseRepository<
         q = applyWhere(q, this.tableName, this.withSoftDeleteFilter(where as any, includeDeleted))
         const result = await q.select(sql<string>`count(*)`.as("count")).executeTakeFirst()
         return parseInt(result?.count ?? "0", 10)
+    }
+
+    async countMany<K extends string>({
+        where,
+        includeDeleted = false,
+    }: {
+        where: Record<K, WhereFilter<DB, TableName, Table>>
+        includeDeleted?: boolean
+    }): Promise<Record<K, number>> {
+        const keys = Object.keys(where) as K[]
+        if (keys.length === 0) return {} as Record<K, number>
+
+        const row: any = await (this.executor as Kysely<DB>)
+            .selectNoFrom(eb =>
+                keys.map(key => {
+                    let sub: any = eb.selectFrom(this.tableName)
+                    sub = applyWhere(sub, this.tableName, this.withSoftDeleteFilter(where[key] as any, includeDeleted))
+                    return sub.select(sql<string>`count(*)`.as("count")).as(key)
+                }),
+            )
+            .executeTakeFirstOrThrow()
+
+        const result = {} as Record<K, number>
+        for (const key of keys) {
+            result[key] = parseInt(row[key] ?? "0", 10)
+        }
+        return result
     }
 
     async exists(args: { where?: WhereFilter<DB, TableName, Table>; includeDeleted?: boolean } = {}): Promise<boolean> {
