@@ -213,6 +213,8 @@ const activePremiumUsers = await userRepo.findMany({
 });
 ```
 
+Empty lists are safe: `in: []` matches no rows and `notIn: []` matches every row, including rows where the column is `null`. This holds inside `AND` / `OR` / `NOT` and for JSONB paths too.
+
 #### JSONB Filtering
 Filter records by deeply nested keys within Postgres `JSONB` columns using type-safe path matching:
 
@@ -323,6 +325,28 @@ const result = await userRepo.findMany({
     }
   }
 });
+```
+
+#### Typing populated rows
+
+Use `Populated` to infer the row type from a repo and the same `populate` input you pass to `findMany`:
+
+```typescript
+import type { Populated } from 'kysely-repo-kit';
+
+type UserWithPosts = Populated<typeof UserRepository, {
+  org: true,
+  posts: { populate: { comments: true } },
+}>;
+// -> Users & { org: Organisations | null; posts: (Posts & { comments: Comments[] })[] }
+```
+
+Use `WithPopulations` to declare the populated keys by hand:
+
+```typescript
+import type { WithPopulations } from 'kysely-repo-kit';
+
+type UserWithProducts = WithPopulations<DB['users'], { products: Selectable<DB['products']>[] }>;
 ```
 
 ---

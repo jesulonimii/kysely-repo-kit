@@ -155,6 +155,19 @@ export type WithPopulated<
     [K in keyof P & keyof Populations]: ResolvePopulatedKey<DB, Populations[K], P[K]>
 }
 
+// Manual shape: selectable row columns plus the populated keys you declare in P.
+export type WithPopulations<Row, P extends Record<string, unknown>> = Omit<Selectable<Row>, keyof P> & P
+
+type RepoInstanceOf<Repo> = Repo extends abstract new (...args: any[]) => infer I ? I : Repo
+
+// Inferred shape: takes a repo class or instance and the same populate input you pass to findMany.
+export type Populated<Repo, P = Record<never, never>> =
+    RepoInstanceOf<Repo> extends BaseRepository<infer DB, any, infer Populations, infer Table>
+        ? P extends PopulateInput<DB, Populations>
+            ? WithPopulated<DB, Table, Populations, P>
+            : never
+        : never
+
 export type SelectInput<Row> = { [K in keyof Row]?: boolean }
 export type LazySelectInput<Row> = SelectInput<Row> | (() => SelectInput<Row>)
 
@@ -247,14 +260,22 @@ function camelCaseKeys(val: unknown): unknown {
     return val
 }
 
+// Empty IN lists are invalid SQL, so empty in/notIn compile to these constant predicates instead.
+const ALWAYS_FALSE = sql<boolean>`1 = 0`
+const ALWAYS_TRUE = sql<boolean>`1 = 1`
+
+function isEmptyList(v: unknown): boolean {
+    return Array.isArray(v) && v.length === 0
+}
+
 function fieldOps(col: string, f: Record<string, unknown>, insensitive: boolean): Array<[string, unknown, unknown]> {
     const ops: Array<[unknown, string, unknown]> = []
     const iCol = sql`lower(${sql.ref(col)})`
 
     if ("equals" in f) ops.push([col, "=", f.equals])
     if ("not" in f) ops.push(f.not === null ? [col, "is not", null] : [col, "!=", f.not])
-    if ("in" in f) ops.push([col, "in", f.in])
-    if ("notIn" in f) ops.push([col, "not in", f.notIn])
+    if ("in" in f) ops.push(isEmptyList(f.in) ? [sql`1`, "=", sql`0`] : [col, "in", f.in])
+    if ("notIn" in f) ops.push(isEmptyList(f.notIn) ? [sql`1`, "=", sql`1`] : [col, "not in", f.notIn])
     if ("gt" in f) ops.push([col, ">", f.gt])
     if ("gte" in f) ops.push([col, ">=", f.gte])
     if ("lt" in f) ops.push([col, "<", f.lt])
@@ -353,9 +374,19 @@ function buildExpr(eb: any, tableName: string, filter: Record<string, unknown>):
                         )
                     }
 
-                    if ("in" in f) parts.push(sql<boolean>`${expr} in ${sql.join((f.in as unknown[]).map(String))}`)
+                    if ("in" in f) {
+                        parts.push(
+                            isEmptyList(f.in)
+                                ? ALWAYS_FALSE
+                                : sql<boolean>`${expr} in (${sql.join((f.in as unknown[]).map(String))})`,
+                        )
+                    }
                     if ("notIn" in f) {
-                        parts.push(sql<boolean>`${expr} not in ${sql.join((f.notIn as unknown[]).map(String))}`)
+                        parts.push(
+                            isEmptyList(f.notIn)
+                                ? ALWAYS_TRUE
+                                : sql<boolean>`${expr} not in (${sql.join((f.notIn as unknown[]).map(String))})`,
+                        )
                     }
                 }
             }
@@ -446,8 +477,14 @@ function applyWhere(q: any, tableName: string, filter: Record<string, unknown>):
                         )
                     }
 
-                    if ("in" in f) q = q.where(expr, "in", (f.in as unknown[]).map(String))
-                    if ("notIn" in f) q = q.where(expr, "not in", (f.notIn as unknown[]).map(String))
+                    if ("in" in f) {
+                        q = isEmptyList(f.in) ? q.where(ALWAYS_FALSE) : q.where(expr, "in", (f.in as unknown[]).map(String))
+                    }
+                    if ("notIn" in f) {
+                        q = isEmptyList(f.notIn)
+                            ? q.where(ALWAYS_TRUE)
+                            : q.where(expr, "not in", (f.notIn as unknown[]).map(String))
+                    }
                 }
             }
         } else if (key === "_raw") {

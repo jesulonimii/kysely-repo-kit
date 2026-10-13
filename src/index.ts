@@ -15,12 +15,14 @@ export type {
     OrderByInput,
     PopulateInput,
     PopulationDefinition,
+    Populated,
     PopulationMap,
     SelectInput,
     StringFilter,
     StringMode,
     WhereFilter,
     WithPopulated,
+    WithPopulations,
 } from "./base"
 
 export type {

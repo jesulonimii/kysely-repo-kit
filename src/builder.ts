@@ -5,6 +5,7 @@ import BaseRepository, {
     type InferTable,
     type LazySelectInput,
     type PopulateInput,
+    type PopulationDefinition,
     type PopulationMap,
     type SelectInput,
     type SoftDeleteRegistry,
@@ -62,12 +63,14 @@ type PopulateConfig<
     Name extends string,
     Ref extends keyof DB & string,
     NestedPopulations extends PopulationMap<DB> = Record<never, never>,
+    LocalKey extends string | undefined = undefined,
+    JustOne extends true | undefined = undefined,
 > = {
     as: Name
     ref: Ref
     foreignKey?: keyof InferSelectableRow<DB, Ref> & string
-    localKey?: string
-    justOne?: true
+    localKey?: LocalKey
+    justOne?: JustOne
     softDelete?: (keyof InferSelectableRow<DB, Ref> & string) | false
     nestedPopulations?: () => NestedPopulations
     select?: LazySelectInput<InferSelectableRow<DB, Ref>>
@@ -135,8 +138,11 @@ class RepoBuilder<
         Name extends string,
         Ref extends keyof DB & string,
         NestedPopulations extends PopulationMap<DB> = Record<never, never>,
-    >(def: PopulateConfig<DB, Name, Ref, NestedPopulations>) {
+        LocalKey extends string | undefined = undefined,
+        JustOne extends true | undefined = undefined,
+    >(def: PopulateConfig<DB, Name, Ref, NestedPopulations, LocalKey, JustOne>) {
         const isSingle = Boolean(def.localKey || def.justOne)
+        // Type mirrors the runtime rule: localKey or justOne makes the relation single.
         const population = definePopulation<DB, InferRow<DB, Ref>, NestedPopulations>({
             table: def.ref,
             foreignKey: def.foreignKey ?? "id",
@@ -148,7 +154,8 @@ class RepoBuilder<
             ...(def.nestedPopulations ? { nestedPopulations: def.nestedPopulations } : {}),
             ...(def.select ? { defaultSelect: def.select } : {}),
             ...(def.where ? { defaultWhere: def.where } : {}),
-        } as any)
+        } as any) as PopulationDefinition<DB, InferRow<DB, Ref>, NestedPopulations> &
+            ([LocalKey] extends [string] ? { justOne: true } : [JustOne] extends [true] ? { justOne: true } : { justOne?: never })
 
         return new RepoBuilder<
             DB,
