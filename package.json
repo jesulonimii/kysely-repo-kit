@@ -1,6 +1,6 @@
 {
   "name": "kysely-repo-kit",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Typed repository and populate layer for Kysely",
   "repository": "https://github.com/jesulonimii/kysely-repo-kit",
   "type": "module",
@@ -28,5 +28,4 @@
     "typescript": "^6.0.3",
     "kysely": "^0.28.17"
   }
-
 }
