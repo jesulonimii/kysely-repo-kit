@@ -740,13 +740,27 @@ export default class BaseRepository<
     async updateMany({
                          where,
                          data,
+                         select,
                      }: {
         where: WhereFilter<DB, TableName, Table>
         data: Updateable<DB[TableName]>
-    }): Promise<number> {
+        select?: SelectInput<Table>
+    }): Promise<Selectable<Table>[]> {
         let q: any = (this.executor.updateTable(this.tableName) as any).set(data as any)
         q = applyWhere(q, this.tableName, where as any)
-        return Number((await q.executeTakeFirst()).numUpdatedRows)
+
+        // Return only ids by default to keep the payload small; defaultSelect does not apply here.
+        if (!select) {
+            return (await q.returning([`${this.tableName}.id`]).execute()) as Selectable<Table>[]
+        }
+
+        const resolved = this.resolveSelect(select)
+        if (resolved.mode === "include") {
+            return (await q.returning(resolved.columns.map(k => `${this.tableName}.${k}`)).execute()) as Selectable<Table>[]
+        }
+
+        const rows = (await q.returningAll().execute()) as Selectable<Table>[]
+        return this.applyExclusion(rows, select)
     }
 
     async upsert({
@@ -868,12 +882,10 @@ export default class BaseRepository<
 
     async deleteMany({ where }: { where: WhereFilter<DB, TableName, Table> }): Promise<number> {
         if (this.isSoftDeletableTable()) {
-            return this.updateMany({
-                where,
-                data: {
-                    [this.softDeleteColumn as string]: new Date(),
-                } as any,
-            })
+            const soft = applyWhere(this.executor.updateTable(this.tableName) as any, this.tableName, where as any).set({
+                [this.softDeleteColumn as string]: new Date(),
+            } as any)
+            return Number((await soft.executeTakeFirst()).numUpdatedRows)
         }
 
         const q = applyWhere(this.executor.deleteFrom(this.tableName) as any, this.tableName, where as any)

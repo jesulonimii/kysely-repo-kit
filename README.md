@@ -179,7 +179,15 @@ const [data, total] = await riderRepo.findManyAndCount({
 * **`createMany({ data })`**
 * **`update({ where, data, select })`**
 * **`updateUnique({ where: { id }, data, select })`**
-* **`updateMany({ where, data })`**
+* **`updateMany({ where, data, select })`** — Returns the updated rows from one `UPDATE ... RETURNING` statement. Returns `{ id }` only unless you pass `select`. Use `.length` for the count. Needs Postgres (`RETURNING`).
+
+```typescript
+const sessions = await sessionRepo.updateMany({
+  where: { scope: "vendor", scopeId: vendorId, revoked: false },
+  data: { revoked: true },
+})
+// sessions: [{ id }, ...]
+```
 * **`upsert({ where, create, update })`** — Returns the inserted, updated, or existing row. An empty `update` leaves a conflicting row unchanged.
 * **`upsertMany({ data })`** — Runs the same upsert behavior for each item and returns the resolved rows in input order.
 * **`delete({ where })`** (performs soft-delete if enabled, otherwise hard-delete)
