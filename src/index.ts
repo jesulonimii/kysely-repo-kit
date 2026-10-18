@@ -1,8 +1,8 @@
-export {default as BaseRepository} from "./base"
+export {default as BaseRepository} from "./base.js"
 export {
     definePopulation,
 
-} from "./base"
+} from "./base.js"
 export type {
     DateFilter,
     FieldFilter,
@@ -23,11 +23,11 @@ export type {
     WhereFilter,
     WithPopulated,
     WithPopulations,
-} from "./base"
+} from "./base.js"
 
 export type {
     RepoConstructor,
     RepoInstance,
-} from "./builder"
+} from "./builder.js"
 
-export {createRepoBuilder} from "./builder"
+export {createRepoBuilder} from "./builder.js"

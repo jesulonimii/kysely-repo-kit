@@ -10,7 +10,7 @@ import BaseRepository, {
     type SelectInput,
     type SoftDeleteRegistry,
     type WhereFilter,
-} from "./base"
+} from "./base.js"
 
 type EmptyPopulations = Record<never, never>
 
