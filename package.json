@@ -19,13 +19,18 @@
   ],
   "scripts": {
     "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p test",
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
     "kysely": "^0.28.17"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.12",
+    "kysely": "^0.28.17",
     "typescript": "^6.0.3",
-    "kysely": "^0.28.17"
+    "vitest": "^5.0.5"
   }
 }

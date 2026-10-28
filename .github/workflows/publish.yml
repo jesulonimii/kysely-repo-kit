@@ -46,5 +46,8 @@ jobs:
 
       - run: pnpm build
 
+      - run: pnpm typecheck
+      - run: pnpm test
+
       # Stages the release for maintainer approval on npmjs.com; auth comes from OIDC trusted publishing.
       - run: npm stage publish --provenance --access public
