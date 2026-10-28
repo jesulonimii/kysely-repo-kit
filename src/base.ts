@@ -3,6 +3,7 @@ import {
     type ExpressionWrapper,
     type Insertable,
     type Kysely,
+    type RawBuilder,
     type Selectable,
     sql,
     type Transaction,
@@ -268,30 +269,34 @@ function isEmptyList(v: unknown): boolean {
     return Array.isArray(v) && v.length === 0
 }
 
+// An undefined identity operator (equals, not, in, notIn) matches nothing; an undefined range or text operator is skipped.
 function fieldOps(col: string, f: Record<string, unknown>, insensitive: boolean): Array<[string, unknown, unknown]> {
     const ops: Array<[unknown, string, unknown]> = []
     const iCol = sql`lower(${sql.ref(col)})`
+    const never: [unknown, string, unknown] = [sql`1`, "=", sql`0`]
 
     if ("equals" in f) ops.push([col, "=", f.equals])
     if ("not" in f) ops.push(f.not === null ? [col, "is not", null] : [col, "!=", f.not])
-    if ("in" in f) ops.push(isEmptyList(f.in) ? [sql`1`, "=", sql`0`] : [col, "in", f.in])
-    if ("notIn" in f) ops.push(isEmptyList(f.notIn) ? [sql`1`, "=", sql`1`] : [col, "not in", f.notIn])
-    if ("gt" in f) ops.push([col, ">", f.gt])
-    if ("gte" in f) ops.push([col, ">=", f.gte])
-    if ("lt" in f) ops.push([col, "<", f.lt])
-    if ("lte" in f) ops.push([col, "<=", f.lte])
+    if ("in" in f) ops.push(f.in === undefined || isEmptyList(f.in) ? never : [col, "in", f.in])
+    if ("notIn" in f) {
+        ops.push(f.notIn === undefined ? never : isEmptyList(f.notIn) ? [sql`1`, "=", sql`1`] : [col, "not in", f.notIn])
+    }
+    if (f.gt !== undefined) ops.push([col, ">", f.gt])
+    if (f.gte !== undefined) ops.push([col, ">=", f.gte])
+    if (f.lt !== undefined) ops.push([col, "<", f.lt])
+    if (f.lte !== undefined) ops.push([col, "<=", f.lte])
 
-    if ("contains" in f) {
+    if (f.contains !== undefined) {
         const v = f.contains as string
         ops.push(insensitive ? [iCol, "like", `%${v.toLowerCase()}%`] : [col, "like", `%${v}%`])
     }
 
-    if ("startsWith" in f) {
+    if (f.startsWith !== undefined) {
         const v = f.startsWith as string
         ops.push(insensitive ? [iCol, "like", `${v.toLowerCase()}%`] : [col, "like", `${v}%`])
     }
 
-    if ("endsWith" in f) {
+    if (f.endsWith !== undefined) {
         const v = f.endsWith as string
         ops.push(insensitive ? [iCol, "like", `%${v.toLowerCase()}`] : [col, "like", `%${v}`])
     }
@@ -307,6 +312,117 @@ function jsonbTextExpr(tableName: string, path: string) {
     return sql<string>`${sql.ref(`${tableName}.${column}`)} #>> ${pgPath}`
 }
 
+// Follows the fieldOps undefined rules, so an undefined path value or identity operator matches nothing.
+function jsonbConditions(tableName: string, jsonb: Record<string, unknown>): RawBuilder<boolean>[] {
+    const conds: RawBuilder<boolean>[] = []
+
+    for (const [path, rawValue] of Object.entries(jsonb)) {
+        const expr = jsonbTextExpr(tableName, path)
+
+        if (rawValue === undefined) {
+            conds.push(ALWAYS_FALSE)
+        } else if (rawValue === null) {
+            conds.push(sql<boolean>`${expr} is null`)
+        } else if (typeof rawValue !== "object" || rawValue instanceof Date) {
+            conds.push(sql<boolean>`${expr} = ${String(rawValue)}`)
+        } else {
+            const f = rawValue as Record<string, unknown>
+            const insensitive = f.mode === "insensitive"
+
+            if ("equals" in f) {
+                conds.push(
+                    f.equals === undefined
+                        ? ALWAYS_FALSE
+                        : insensitive
+                            ? sql<boolean>`lower(${expr}) = lower(${String(f.equals)})`
+                            : sql<boolean>`${expr} = ${String(f.equals)}`,
+                )
+            }
+
+            if ("not" in f) {
+                conds.push(
+                    f.not === undefined
+                        ? ALWAYS_FALSE
+                        : f.not === null
+                            ? sql<boolean>`${expr} is not null`
+                            : insensitive
+                                ? sql<boolean>`lower(${expr}) != lower(${String(f.not)})`
+                                : sql<boolean>`${expr} != ${String(f.not)}`,
+                )
+            }
+
+            if (f.contains !== undefined) {
+                const v = String(f.contains)
+                conds.push(
+                    insensitive
+                        ? sql<boolean>`lower(${expr}) like ${`%${v.toLowerCase()}%`}`
+                        : sql<boolean>`${expr} like ${`%${v}%`}`,
+                )
+            }
+
+            if (f.startsWith !== undefined) {
+                const v = String(f.startsWith)
+                conds.push(
+                    insensitive
+                        ? sql<boolean>`lower(${expr}) like ${`${v.toLowerCase()}%`}`
+                        : sql<boolean>`${expr} like ${`${v}%`}`,
+                )
+            }
+
+            if (f.endsWith !== undefined) {
+                const v = String(f.endsWith)
+                conds.push(
+                    insensitive
+                        ? sql<boolean>`lower(${expr}) like ${`%${v.toLowerCase()}`}`
+                        : sql<boolean>`${expr} like ${`%${v}`}`,
+                )
+            }
+
+            if ("in" in f) {
+                conds.push(
+                    f.in === undefined || isEmptyList(f.in)
+                        ? ALWAYS_FALSE
+                        : sql<boolean>`${expr} in (${sql.join((f.in as unknown[]).map(String))})`,
+                )
+            }
+
+            if ("notIn" in f) {
+                conds.push(
+                    f.notIn === undefined
+                        ? ALWAYS_FALSE
+                        : isEmptyList(f.notIn)
+                            ? ALWAYS_TRUE
+                            : sql<boolean>`${expr} not in (${sql.join((f.notIn as unknown[]).map(String))})`,
+                )
+            }
+        }
+    }
+
+    return conds
+}
+
+// Mirrors applyWhere: returns false when the filter compiles to no condition and so matches every row.
+function restricts(tableName: string, filter: Record<string, unknown>): boolean {
+    for (const [key, value] of Object.entries(filter)) {
+        if (key === "AND") {
+            if ((value as Record<string, unknown>[]).some(sub => restricts(tableName, sub))) return true
+        } else if (key === "OR") {
+            const subs = value as Record<string, unknown>[]
+            if (subs.length === 0 || subs.every(sub => restricts(tableName, sub))) return true
+        } else if (key === "jsonb") {
+            if (jsonbConditions(tableName, value as Record<string, unknown>).length > 0) return true
+        } else if (key === "NOT" || key === "_raw") {
+            return true
+        } else if (value === null || typeof value !== "object" || value instanceof Date) {
+            return true
+        } else if (fieldOps(`${tableName}.${key}`, value as Record<string, unknown>, false).length > 0) {
+            return true
+        }
+    }
+
+    return false
+}
+
 function buildExpr(eb: any, tableName: string, filter: Record<string, unknown>): any {
     const parts: any[] = []
 
@@ -318,78 +434,7 @@ function buildExpr(eb: any, tableName: string, filter: Record<string, unknown>):
         } else if (key === "NOT") {
             parts.push(eb.not(buildExpr(eb, tableName, value as any)))
         } else if (key === "jsonb") {
-            for (const [path, rawValue] of Object.entries(value as Record<string, unknown>)) {
-                const expr = jsonbTextExpr(tableName, path)
-
-                if (rawValue === null) {
-                    parts.push(sql<boolean>`${expr} is null`)
-                } else if (typeof rawValue !== "object" || rawValue instanceof Date) {
-                    parts.push(sql<boolean>`${expr} = ${String(rawValue)}`)
-                } else {
-                    const f = rawValue as Record<string, unknown>
-                    const insensitive = f.mode === "insensitive"
-
-                    if ("equals" in f) {
-                        parts.push(
-                            insensitive
-                                ? sql<boolean>`lower(${expr}) = lower(${String(f.equals)})`
-                                : sql<boolean>`${expr} = ${String(f.equals)}`,
-                        )
-                    }
-
-                    if ("not" in f) {
-                        parts.push(
-                            f.not === null
-                                ? sql<boolean>`${expr} is not null`
-                                : insensitive
-                                    ? sql<boolean>`lower(${expr}) != lower(${String(f.not)})`
-                                    : sql<boolean>`${expr} != ${String(f.not)}`,
-                        )
-                    }
-
-                    if ("contains" in f) {
-                        const v = String(f.contains)
-                        parts.push(
-                            insensitive
-                                ? sql<boolean>`lower(${expr}) like ${`%${v.toLowerCase()}%`}`
-                                : sql<boolean>`${expr} like ${`%${v}%`}`,
-                        )
-                    }
-
-                    if ("startsWith" in f) {
-                        const v = String(f.startsWith)
-                        parts.push(
-                            insensitive
-                                ? sql<boolean>`lower(${expr}) like ${`${v.toLowerCase()}%`}`
-                                : sql<boolean>`${expr} like ${`${v}%`}`,
-                        )
-                    }
-
-                    if ("endsWith" in f) {
-                        const v = String(f.endsWith)
-                        parts.push(
-                            insensitive
-                                ? sql<boolean>`lower(${expr}) like ${`%${v.toLowerCase()}`}`
-                                : sql<boolean>`${expr} like ${`%${v}`}`,
-                        )
-                    }
-
-                    if ("in" in f) {
-                        parts.push(
-                            isEmptyList(f.in)
-                                ? ALWAYS_FALSE
-                                : sql<boolean>`${expr} in (${sql.join((f.in as unknown[]).map(String))})`,
-                        )
-                    }
-                    if ("notIn" in f) {
-                        parts.push(
-                            isEmptyList(f.notIn)
-                                ? ALWAYS_TRUE
-                                : sql<boolean>`${expr} not in (${sql.join((f.notIn as unknown[]).map(String))})`,
-                        )
-                    }
-                }
-            }
+            parts.push(...jsonbConditions(tableName, value as Record<string, unknown>))
         } else if (key === "_raw") {
             parts.push((value as (eb: any) => any)(eb))
         } else {
@@ -420,73 +465,7 @@ function applyWhere(q: any, tableName: string, filter: Record<string, unknown>):
         } else if (key === "NOT") {
             q = q.where((eb: any) => eb.not(buildExpr(eb, tableName, value as any)))
         } else if (key === "jsonb") {
-            for (const [path, rawValue] of Object.entries(value as Record<string, unknown>)) {
-                const expr = jsonbTextExpr(tableName, path)
-
-                if (rawValue === null) {
-                    q = q.where(sql<boolean>`${expr} is null`)
-                } else if (typeof rawValue !== "object" || rawValue instanceof Date) {
-                    q = q.where(sql<boolean>`${expr} = ${String(rawValue)}`)
-                } else {
-                    const f = rawValue as Record<string, unknown>
-                    const insensitive = f.mode === "insensitive"
-
-                    if ("equals" in f) {
-                        q = q.where(
-                            insensitive
-                                ? sql<boolean>`lower(${expr}) = lower(${String(f.equals)})`
-                                : sql<boolean>`${expr} = ${String(f.equals)}`,
-                        )
-                    }
-
-                    if ("not" in f) {
-                        q =
-                            f.not === null
-                                ? q.where(sql<boolean>`${expr} is not null`)
-                                : q.where(
-                                    insensitive
-                                        ? sql<boolean>`lower(${expr}) != lower(${String(f.not)})`
-                                        : sql<boolean>`${expr} != ${String(f.not)}`,
-                                )
-                    }
-
-                    if ("contains" in f) {
-                        const v = String(f.contains)
-                        q = q.where(
-                            insensitive
-                                ? sql<boolean>`lower(${expr}) like ${`%${v.toLowerCase()}%`}`
-                                : sql<boolean>`${expr} like ${`%${v}%`}`,
-                        )
-                    }
-
-                    if ("startsWith" in f) {
-                        const v = String(f.startsWith)
-                        q = q.where(
-                            insensitive
-                                ? sql<boolean>`lower(${expr}) like ${`${v.toLowerCase()}%`}`
-                                : sql<boolean>`${expr} like ${`${v}%`}`,
-                        )
-                    }
-
-                    if ("endsWith" in f) {
-                        const v = String(f.endsWith)
-                        q = q.where(
-                            insensitive
-                                ? sql<boolean>`lower(${expr}) like ${`%${v.toLowerCase()}`}`
-                                : sql<boolean>`${expr} like ${`%${v}`}`,
-                        )
-                    }
-
-                    if ("in" in f) {
-                        q = isEmptyList(f.in) ? q.where(ALWAYS_FALSE) : q.where(expr, "in", (f.in as unknown[]).map(String))
-                    }
-                    if ("notIn" in f) {
-                        q = isEmptyList(f.notIn)
-                            ? q.where(ALWAYS_TRUE)
-                            : q.where(expr, "not in", (f.notIn as unknown[]).map(String))
-                    }
-                }
-            }
+            for (const cond of jsonbConditions(tableName, value as Record<string, unknown>)) q = q.where(cond)
         } else if (key === "_raw") {
             q = q.where((eb: any) => (value as (eb: any) => any)(eb))
         } else {
@@ -711,6 +690,7 @@ export default class BaseRepository<
         data: Updateable<DB[TableName]>
         select?: SelectInput<Table>
     }): Promise<Selectable<Table> | null> {
+        this.assertWhereRestricts(where, "update")
         const processedData = await this.beforeUpdate(data, where)
         let q: any = (this.executor.updateTable(this.tableName) as any).set(processedData as any)
         q = applyWhere(q, this.tableName, where as any)
@@ -746,6 +726,7 @@ export default class BaseRepository<
         data: Updateable<DB[TableName]>
         select?: SelectInput<Table>
     }): Promise<Selectable<Table>[]> {
+        this.assertWhereRestricts(where, "updateMany")
         let q: any = (this.executor.updateTable(this.tableName) as any).set(data as any)
         q = applyWhere(q, this.tableName, where as any)
 
@@ -830,6 +811,7 @@ export default class BaseRepository<
     }
 
     async hardDelete({ where }: { where: WhereFilter<DB, TableName, Table> }): Promise<Selectable<Table> | null> {
+        this.assertWhereRestricts(where, "hardDelete")
         await this.beforeDelete(where)
         const q = applyWhere(this.executor.deleteFrom(this.tableName) as any, this.tableName, where as any)
         const row = ((await q.returningAll().executeTakeFirst()) as Selectable<Table>) ?? null
@@ -852,9 +834,10 @@ export default class BaseRepository<
             throw new Error(`Soft delete is not enabled for table ${this.tableName}`)
         }
 
+        this.assertWhereRestricts(where, "softDelete")
         await this.beforeDelete(where)
 
-        const q = applyWhere(this.executor.updateTable(this.tableName) as any, this.tableName, where as any).set({
+        const q = this.liveRowsOnly(applyWhere(this.executor.updateTable(this.tableName) as any, this.tableName, where as any)).set({
             [this.softDeleteColumn]: deletedAt,
         } as any)
 
@@ -881,8 +864,9 @@ export default class BaseRepository<
     }
 
     async deleteMany({ where }: { where: WhereFilter<DB, TableName, Table> }): Promise<number> {
+        this.assertWhereRestricts(where, "deleteMany")
         if (this.isSoftDeletableTable()) {
-            const soft = applyWhere(this.executor.updateTable(this.tableName) as any, this.tableName, where as any).set({
+            const soft = this.liveRowsOnly(applyWhere(this.executor.updateTable(this.tableName) as any, this.tableName, where as any)).set({
                 [this.softDeleteColumn as string]: new Date(),
             } as any)
             return Number((await soft.executeTakeFirst()).numUpdatedRows)
@@ -997,6 +981,21 @@ export default class BaseRepository<
         }
     }
 
+    // A non-empty where that compiles to no condition is almost always an undefined id, so refuse it.
+    protected assertWhereRestricts(where: WhereFilter<DB, TableName, Table>, method: string): void {
+        const filter = (where ?? {}) as Record<string, unknown>
+        if (Object.keys(filter).length > 0 && !restricts(this.tableName, filter)) {
+            throw new Error(
+                `${method} on ${this.tableName} refused: every where condition is undefined, so it would touch every row. Pass where: {} to target every row on purpose.`,
+            )
+        }
+    }
+
+    // Soft deletes skip rows that are already deleted, so the first deleted_at stays and counts stay right.
+    protected liveRowsOnly(q: any): any {
+        return q.where(`${this.tableName}.${this.softDeleteColumn}`, "is", null)
+    }
+
     protected isSoftDeletableTable() {
         return Boolean(this.softDeleteColumn)
     }
@@ -1012,7 +1011,7 @@ export default class BaseRepository<
             throw new Error(`Soft delete is not enabled for table ${this.tableName}`)
         }
 
-        const q = applyWhere(this.executor.updateTable(this.tableName) as any, this.tableName, where as any).set({
+        const q = this.liveRowsOnly(applyWhere(this.executor.updateTable(this.tableName) as any, this.tableName, where as any)).set({
             [this.softDeleteColumn]: deletedAt,
         } as any)
 

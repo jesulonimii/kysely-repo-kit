@@ -196,6 +196,8 @@ const sessions = await sessionRepo.updateMany({
 * **`deleteUnique({ where: { id } })`**
 * **`deleteMany({ where })`**
 
+On a soft-delete repo, `delete`, `softDelete`, `deleteUnique` and `deleteMany` skip rows that are already deleted. The first `deleted_at` is kept, deleting an already-deleted row returns `null`, and the `deleteMany` count leaves those rows out. `hardDelete` still removes them.
+
 ---
 
 ### Rich Filtering (`WhereFilter`)
@@ -222,6 +224,22 @@ const activePremiumUsers = await userRepo.findMany({
 ```
 
 Empty lists are safe: `in: []` matches no rows and `notIn: []` matches every row, including rows where the column is `null`. This holds inside `AND` / `OR` / `NOT` and for JSONB paths too.
+
+#### Undefined values
+
+A missing bound means no bound, and a missing identity means no match:
+
+| Filter | Result |
+|---|---|
+| `{ created_at: { gte: from, lte: undefined } }` | `undefined` range and text operators (`gt`, `gte`, `lt`, `lte`, `contains`, `startsWith`, `endsWith`) are skipped, so this is `created_at >= from` |
+| `{ id: undefined }` | matches no rows |
+| `{ id: { equals: undefined } }`, `not`, `in`, `notIn` | matches no rows |
+| `{ jsonb: { 'meta.plan': undefined } }` | matches no rows |
+| `{ age: null }` | `age IS NULL`, as before |
+
+So an optional DTO field or an unset id never widens a query to the whole table.
+
+Bulk writes add one more guard. `update`, `updateMany`, `delete`, `softDelete`, `hardDelete` and `deleteMany` throw when `where` has keys but none of them leaves a condition, for example `{ created_at: { gte: undefined } }`. Pass `where: {}` to target every row on purpose.
 
 #### JSONB Filtering
 Filter records by deeply nested keys within Postgres `JSONB` columns using type-safe path matching:

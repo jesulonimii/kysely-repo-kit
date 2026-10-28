@@ -37,6 +37,15 @@ pnpm run build
 
 This compiles files from `src/` into the `dist/` directory, outputting both modern ES Modules (`.js`) and type declarations (`.d.ts`).
 
+### 4. Run the Tests
+
+```bash
+pnpm test        # runtime and type tests
+pnpm typecheck   # type-checks the test files
+```
+
+The tests run against [PGlite](https://pglite.dev), an in-process Postgres, so you do not need Docker or a database server. Runtime tests live in `test/*.test.ts` and type tests in `test/*.test-d.ts`.
+
 ---
 
 ## Pull Request Guidelines
@@ -45,7 +54,7 @@ When submitting a pull request:
 
 1. **Create a Feature Branch**: Branch off from `main` with a clear, descriptive name (e.g., `feat/add-mysql-support` or `fix/soft-delete-where`).
 2. **Keep it Focused**: A single PR should address one bug fix or feature enhancement. This makes review faster and more effective.
-3. **Format & Type Check**: Ensure your code passes TypeScript type checking by running `pnpm run build` before pushing.
+3. **Format & Type Check**: Ensure your code passes `pnpm run build`, `pnpm typecheck` and `pnpm test` before pushing. Add tests for any behaviour you change.
 4. **Write Clean Code**: Follow existing patterns, keep files clean, and preserve all relevant inline comments and docstrings.
 5. **Update Documentation**: If you're adding new features or changing APIs, make sure to update the `README.md` to reflect those changes.
 
